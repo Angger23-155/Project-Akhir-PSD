@@ -1,0 +1,20 @@
+Task is to classify an audio recording as either cat or dog.
+
+The time series represent the change in amplitude over time in the pressence of either cat or dog sounds.
+The data set has been truncated to the shortest instance.
+
+Original data can be found here:
+https://www.kaggle.com/mmoreaux/audio-cats-and-dogs
+
+Original paper:
+Takahashi N, Gygli M, Pfister B, Van Gool L. Deep convolutional neural networks and data augmentation for acoustic event detection. arXiv preprint arXiv:1604.07160. 2016 Apr 25.
+
+Corrspondence should be addressed to Naoya Takahashi:
+NaoyaA.Takahashi@jp.sony.com
+
+Instances: 328
+Time series length: 14773
+Classes:
+- Cat (164)
+- Dog (164)
+default train test split created through a random partition.
