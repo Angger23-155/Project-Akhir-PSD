@@ -21,7 +21,8 @@ try:
 except Exception:
     librosa = None
 
-WORKDIR = r"d:\Project Akhir PSD"
+# Gunakan path relatif agar berfungsi di lokal dan cloud
+WORKDIR = os.path.dirname(os.path.abspath(__file__))
 MODEL_PATH = os.path.join(WORKDIR, 'model_pipeline.joblib')
 DATA_PATH = os.path.join(WORKDIR, 'data_processed.npz')
 FIG_DIR = os.path.join(WORKDIR, 'figures')
