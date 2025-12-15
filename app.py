@@ -14,73 +14,22 @@ FIG_DIR = os.path.join(WORKDIR, 'figures')
 
 st.set_page_config(page_title="Cats vs Dogs Audio Classifier", layout="wide")
 
-# --- CSS STYLING ---
-st.markdown("""
-<style>
-    .result-card { background-color: #f0f2f6; padding: 20px; border-radius: 10px; margin-bottom: 10px; }
-    .stProgress > div > div > div > div { background-color: #4CAF50; }
-</style>
-""", unsafe_allow_html=True)
+# --- HEADER ---
+st.title('🎵 Klasifikasi Audio Cats vs Dogs')
+st.markdown(f'Model: **SelectKBest + RandomForest** | Dataset: **CatsDogs TimeSeries**')
 
-# --- FUNGSI SMART SCANNING (SOLUSI AKURASI) ---
-def process_audio_scanning(uploaded_file, target_length=14773):
-    """
-    Menghasilkan 3 variasi alignment (Kiri, Tengah, Kanan)
-    untuk mengatasi masalah pergeseran posisi suara pada model Random Forest.
-    """
+# --- FUNGSI BANTUAN ---
+def process_audio_file(uploaded_file, target_length=14773):
     try:
-        # 1. Load Audio (16kHz standard TSC)
-        y, sr = librosa.load(uploaded_file, sr=16000)
-        
-        # 2. Trim Silence (Hapus hening)
-        y_trimmed, _ = librosa.effects.trim(y, top_db=20)
-        if len(y_trimmed) > 0:
-            y = y_trimmed
-
-        # 3. Normalisasi
-        if np.max(np.abs(y)) > 0:
-            y = y / np.max(np.abs(y))
-
-        # 4. Generate 3 Kandidat (Batch Processing)
-        candidates = []
-        
-        # Jika audio lebih PENDEK dari target, kita padding dengan 3 cara
-        if len(y) < target_length:
-            pad_needed = target_length - len(y)
-            
-            # Kandidat 1: Left Align (Padding di Kanan) -> Suara di Awal
-            c1 = np.pad(y, (0, pad_needed), 'constant')
-            
-            # Kandidat 2: Center Align (Padding Kiri Kanan) -> Suara di Tengah
-            pad_l = pad_needed // 2
-            pad_r = pad_needed - pad_l
-            c2 = np.pad(y, (pad_l, pad_r), 'constant')
-            
-            # Kandidat 3: Right Align (Padding di Kiri) -> Suara di Akhir
-            # (Ini penting karena file ARFF kamu banyak nol di awal!)
-            c3 = np.pad(y, (pad_needed, 0), 'constant')
-            
-            candidates = [c1, c2, c3]
-            
-        # Jika audio lebih PANJANG, kita potong dengan 3 cara
+        y, sr = librosa.load(uploaded_file, sr=None)
+        if len(y) > target_length:
+            y = y[:target_length]
         else:
-            # Kandidat 1: Awal
-            c1 = y[:target_length]
-            
-            # Kandidat 2: Tengah
-            start_mid = (len(y) - target_length) // 2
-            c2 = y[start_mid : start_mid + target_length]
-            
-            # Kandidat 3: Akhir
-            c3 = y[-target_length:]
-            
-            candidates = [c1, c2, c3]
-
-        # Stack menjadi array (3, 14773)
-        return np.array(candidates)
-
+            padding = target_length - len(y)
+            y = np.pad(y, (0, padding), 'constant')
+        return y.reshape(1, -1)
     except Exception as e:
-        st.error(f"Error processing: {e}")
+        st.error(f"Error memproses audio: {e}")
         return None
 
 def decode_label(x):
@@ -91,21 +40,15 @@ def decode_label(x):
 
 # --- LOAD MODEL ---
 if not os.path.exists(MODEL_PATH):
-    st.error(f'❌ Model `{MODEL_NAME}` tidak ditemukan.')
+    st.error(f'❌ File model `{MODEL_NAME}` tidak ditemukan.')
+    st.info("Pastikan file model sudah di-upload ke GitHub sejajar dengan app.py")
     st.stop()
-
-try:
+else:
     model = joblib.load(MODEL_PATH)
-except Exception as e:
-    st.error(f"Gagal load model: {e}")
-    st.stop()
+    expected_features = getattr(model, 'n_features_in_', 14773)
 
-# --- MAIN UI ---
-st.title('🎵 Klasifikasi Audio Cats vs Dogs')
-st.caption('Model: SelectKBest + RandomForest | Strategy: Multi-Alignment Scanning')
-
-# TABS
-tab1, tab2, tab3 = st.tabs(["📂 Test Set (Internal)", "🎙️ Upload .wav (Live)", "📊 Visualisasi"])
+# --- TABS UTAMA ---
+tab1, tab2, tab3 = st.tabs(["📂 Gunakan Test Set", "🎙️ Upload File .wav", "📊 Visualisasi Data"])
 
 # === TAB 1: DATA TEST ===
 with tab1:
@@ -114,115 +57,89 @@ with tab1:
         X_test = data['X_test']
         y_test = data['y_test']
         
-        st.info("Prediksi Data Test (20% Split)")
+        st.info("Prediksi menggunakan data test (20% split).")
         col1, col2 = st.columns([2, 1])
         with col1:
-            idx = st.slider('Pilih Index', 0, len(X_test)-1, 0)
-            if st.button('Prediksi'):
-                sample = X_test[idx].reshape(1, -1)
+            idx = st.slider('Pilih Index Sample', 0, len(X_test)-1, 0)
+            sample = X_test[idx].reshape(1, -1)
+            true_lbl = decode_label(y_test[idx])
+            
+            if st.button('🔍 Prediksi Sample Ini'):
                 pred = model.predict(sample)[0]
-                true_lbl = decode_label(y_test[idx])
                 pred_lbl = decode_label(pred)
                 
                 c1, c2 = st.columns(2)
-                c1.metric("Asli", true_lbl.upper())
+                c1.metric("Label Asli", true_lbl)
                 if true_lbl.lower() == pred_lbl.lower():
-                    c2.success(f"Prediksi: {pred_lbl.upper()} ✅")
+                    c2.success(f"✅ Prediksi: {pred_lbl}")
                 else:
-                    c2.error(f"Prediksi: {pred_lbl.upper()} ❌")
+                    c2.error(f"❌ Prediksi: {pred_lbl}")
+        with col2:
+             st.metric("Total Test Samples", len(X_test))
     else:
         st.warning("Data test tidak ditemukan.")
 
-# === TAB 2: UPLOAD (DENGAN SCANNING) ===
+# === TAB 2: UPLOAD AUDIO ===
 with tab2:
-    st.write("### 🎙️ Uji Coba Audio Sendiri")
-    st.markdown("Menggunakan teknik **Scanning** (mencoba posisi Awal, Tengah, Akhir) untuk akurasi maksimal.")
-    
+    st.write("Uji coba dengan file audio eksternal.")
     uploaded_wav = st.file_uploader("Upload .wav", type=["wav"])
-    
-    if uploaded_wav:
+    if uploaded_wav is not None:
         st.audio(uploaded_wav)
-        
-        if st.button("⚡ Analisis Smart Scan"):
-            with st.spinner("Scanning alignment terbaik..."):
-                # Dapatkan 3 versi audio
-                X_batch = process_audio_scanning(uploaded_wav)
-                
-                if X_batch is not None:
-                    try:
-                        # Prediksi Probabilitas untuk ketiganya sekaligus
-                        # Output shape: (3, 2) -> [ [prob_cat, prob_dog], ... ]
-                        all_probs = model.predict_proba(X_batch)
-                        
-                        # Kita ambil RATA-RATA Probabilitas (Soft Voting)
-                        # Ini membuat prediksi lebih stabil
-                        avg_probs = np.mean(all_probs, axis=0)
-                        
-                        # Probabilitas Final
-                        p_cat = avg_probs[0] # Asumsi index 0 = Cat
-                        p_dog = avg_probs[1] # Asumsi index 1 = Dog
-                        
-                        # Cek Label Classes (Kadang terbalik tergantung training)
-                        # Kita asumsikan default alfabet: 0=Cat, 1=Dog. 
-                        # Jika di modelmu terbalik, tukar variabel p_cat dan p_dog di sini.
-                        if hasattr(model, 'classes_'):
-                            classes = model.classes_
-                            # Logika mapping sederhana
-                            if 'dog' in str(classes[0]).lower():
-                                p_dog, p_cat = avg_probs[0], avg_probs[1]
-                        
-                        # TAMPILAN HASIL
-                        st.markdown("---")
-                        c1, c2 = st.columns(2)
-                        
-                        with c1:
-                            st.markdown(f"<h3 style='text-align: center;'>🐱 Kucing</h3>", unsafe_allow_html=True)
-                            st.progress(float(p_cat))
-                            st.markdown(f"<div style='text-align: center; font-weight:bold;'>{p_cat:.1%}</div>", unsafe_allow_html=True)
-                            
-                        with c2:
-                            st.markdown(f"<h3 style='text-align: center;'>🐶 Anjing</h3>", unsafe_allow_html=True)
-                            st.progress(float(p_dog))
-                            st.markdown(f"<div style='text-align: center; font-weight:bold;'>{p_dog:.1%}</div>", unsafe_allow_html=True)
-                        
-                        # KEPUTUSAN FINAL
-                        st.markdown("---")
-                        final_pred = "KUCING" if p_cat > p_dog else "ANJING"
-                        confidence = max(p_cat, p_dog)
-                        
-                        if final_pred == "KUCING":
-                            st.success(f"🎉 **Hasil Akhir: {final_pred}** (Keyakinan: {confidence:.1%})")
-                        else:
-                            st.success(f"🎉 **Hasil Akhir: {final_pred}** (Keyakinan: {confidence:.1%})")
-                            
-                        # DEBUG: Tampilkan detail scan (Optional)
-                        with st.expander("Lihat Detail Scanning"):
-                            st.write("Model menguji 3 posisi suara:")
-                            st.write(f"1. Posisi Awal (Kiri): Cat {all_probs[0][0]:.2f} | Dog {all_probs[0][1]:.2f}")
-                            st.write(f"2. Posisi Tengah: Cat {all_probs[1][0]:.2f} | Dog {all_probs[1][1]:.2f}")
-                            st.write(f"3. Posisi Akhir (Kanan): Cat {all_probs[2][0]:.2f} | Dog {all_probs[2][1]:.2f}")
-                            
-                    except Exception as e:
-                        st.error(f"Error prediksi: {e}")
-                        # Fallback ke prediksi biasa
-                        pred = model.predict(X_batch)[0]
-                        st.info(f"Prediksi Raw: {pred}")
+        if st.button("⚡ Analisis Audio"):
+            with st.spinner("Memproses..."):
+                feats = process_audio_file(uploaded_wav, target_length=expected_features)
+                if feats is not None:
+                    pred = model.predict(feats)[0]
+                    lbl = decode_label(pred)
+                    if 'cat' in lbl.lower() or 'kucing' in lbl.lower():
+                        st.success(f"🐱 Hasil: **KUCING (Cat)**")
+                    else:
+                        st.success(f"🐶 Hasil: **ANJING (Dog)**")
 
 # === TAB 3: VISUALISASI ===
 with tab3:
-    st.header("🖼️ Visualisasi Project")
+    st.header("🖼️ Galeri Visualisasi Project")
     
-    # Confusion Matrix
-    cm_path = os.path.join(FIG_DIR, 'confusion_matrix_selectk_best.png')
+    # 1. Confusion Matrix (Paling Penting)
+    st.subheader("1. Evaluasi Model (Confusion Matrix)")
+    cm_file = 'confusion_matrix_selectk_best.png'
+    cm_path = os.path.join(FIG_DIR, cm_file)
+    
     if os.path.exists(cm_path):
-        st.image(Image.open(cm_path), caption="Confusion Matrix", width=500)
+        # Tampilkan besar di tengah
+        col_cm1, col_cm2 = st.columns([1, 2])
+        with col_cm1:
+             st.write("""
+             **Analisis:**
+             Confusion matrix menunjukkan performa model pada data uji. 
+             Diagonal utama menunjukkan prediksi yang benar.
+             """)
+        with col_cm2:
+             st.image(Image.open(cm_path), caption="SelectKBest + Random Forest", use_column_width=True)
+    else:
+        st.warning(f"File `{cm_file}` tidak ditemukan di folder figures.")
+
+    st.markdown("---")
+
+    # 2. Gambar Preprocessing (Grid Layout)
+    st.subheader("2. Insight Data & Preprocessing")
     
-    # Gallery
-    st.subheader("Preprocessing Insight")
-    img_list = ["class_distribution.png", "variance_histogram.png", "boxplots_first4.png"]
+    # Daftar nama file sesuai screenshot kamu
+    # Pastikan ekstensi filenya benar (.png atau .jpg)
+    prep_images = [
+        {"file": "class_distribution.png", "caption": "Distribusi Kelas (Seimbang/Tidak)"},
+        {"file": "variance_histogram.png", "caption": "Histogram Variansi Fitur"},
+        {"file": "boxplots_first4.png", "caption": "Boxplot 4 Fitur Pertama"}
+    ]
+    
+    # Tampilkan dalam kolom
     cols = st.columns(3)
-    for i, fname in enumerate(img_list):
-        fpath = os.path.join(FIG_DIR, fname)
-        if os.path.exists(fpath):
-            with cols[i%3]:
-                st.image(Image.open(fpath), caption=fname, use_column_width=True)
+    for i, item in enumerate(prep_images):
+        with cols[i % 3]: # Loop kolom agar rapi
+            img_path = os.path.join(FIG_DIR, item["file"])
+            if os.path.exists(img_path):
+                st.image(Image.open(img_path), caption=item["caption"], use_column_width=True)
+            else:
+                st.info(f"Gambar `{item['file']}` belum tersedia.")
+
+st.caption("Project Akhir PSD - Angger Maulana Effendi")
