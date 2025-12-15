@@ -37,26 +37,30 @@ st.sidebar.caption("Project Akhir PSD - Angger Maulana Effendi")
 st.title('🎵 Klasifikasi Audio Cats vs Dogs')
 st.markdown(f'Model: **SelectKBest + RandomForest** | Dataset: **CatsDogs TimeSeries**')
 
-# --- FUNGSI BANTUAN ---
-# --- GANTI FUNGSI PROCESS_AUDIO_FILE DI APP.PY KAMU ---
+# --- FUNGSI BANTUAN (UPDATED) ---
 def process_audio_file(uploaded_file, target_length=14773):
+    """
+    Memproses audio dengan:
+    1. Resample ke 8000Hz (agar cakupan waktu per sample lebih luas)
+    2. Trimming (menghapus hening di awal/akhir)
+    3. Padding/Cutting ke 14773 fitur
+    """
     try:
-        # Load audio dengan Sampling Rate 8000 Hz (ini adalah asumsi terbaik)
-        y, sr = librosa.load(uploaded_file, sr=8000) 
+        # 1. Load dengan SR 8000Hz (PENTING: Menyesuaikan dataset TimeSeries umum)
+        y, sr = librosa.load(uploaded_file, sr=8000)
         
-        # Hapus Hening (Trim) - Ini penting untuk fokus pada suara
-        y_trimmed, _ = librosa.effects.trim(y, top_db=20)
+        # 2. Hapus Hening (Silence Trimming)
+        # Menghapus bagian diam (noise floor < 20db) di awal dan akhir
+        y, _ = librosa.effects.trim(y, top_db=20)
         
-        # Kita pakai sinyal yang sudah di-trim
-        y = y_trimmed 
-            
-        # 4. Logika Padding/Truncating (Mengambil 14773 titik dari data yang sudah di-trim)
+        # 3. Logika Padding/Truncating
         if len(y) > target_length:
-            # Jika terlalu panjang (lebih dari 14773), ambil bagian awal
-            y = y[:target_length]
+            # Jika masih terlalu panjang setelah di-trim, ambil bagian tengah
+            # (Bagian tengah biasanya berisi informasi suara utama)
+            start = (len(y) - target_length) // 2
+            y = y[start : start + target_length]
         else:
-            # Jika terlalu pendek, tambahkan nol (padding mode='constant')
-            # Ini mengasumsikan model dilatih dengan padding nol
+            # Jika kurang, tambahkan nol (padding constant) di belakang
             padding = target_length - len(y)
             y = np.pad(y, (0, padding), 'constant')
             
@@ -64,6 +68,12 @@ def process_audio_file(uploaded_file, target_length=14773):
     except Exception as e:
         st.error(f"Error memproses audio: {e}")
         return None
+
+def decode_label(x):
+    try:
+        return x.decode() if isinstance(x, (bytes, bytearray)) else str(x)
+    except:
+        return str(x)
 
 # --- LOAD MODEL ---
 if not os.path.exists(MODEL_PATH):
@@ -120,7 +130,7 @@ with tab2:
     if uploaded_wav is not None:
         st.audio(uploaded_wav)
         if st.button("⚡ Analisis Audio"):
-            with st.spinner("Sedang memproses..."):
+            with st.spinner("Sedang memproses (Resampling 8kHz & Trimming)..."):
                 feats = process_audio_file(uploaded_wav, target_length=expected_features)
                 if feats is not None:
                     pred = model.predict(feats)[0]
