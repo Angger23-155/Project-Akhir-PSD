@@ -14,59 +14,69 @@ FIG_DIR = os.path.join(WORKDIR, 'figures')
 
 st.set_page_config(page_title="Cats vs Dogs Audio Classifier", layout="wide")
 
-# --- SIDEBAR: METRICS INFO ---
-st.sidebar.title("📊 Performa Model")
-st.sidebar.markdown("Statistik evaluasi pada data uji (20% Split):")
+# --- CUSTOM CSS ---
+st.markdown("""
+<style>
+    .stProgress > div > div > div > div { background-color: #4CAF50; }
+    .big-font { font-size:20px !important; font-weight: bold; }
+</style>
+""", unsafe_allow_html=True)
 
-col1, col2 = st.sidebar.columns(2)
-with col1:
-    st.metric("Akurasi", "63.6%")
-with col2:
-    st.metric("F1-Macro", "0.636")
-
-st.sidebar.markdown("---")
-st.sidebar.markdown("**Validasi Silang (Nested CV):**")
-st.sidebar.info("F1-Macro: 0.525 ± 0.058")
-
-st.sidebar.markdown("---")
-st.sidebar.markdown("**Detail Pipeline:**")
-st.sidebar.code("VarianceThreshold -> StandardScaler -> SelectKBest(k=200) -> RandomForest(n=100)")
-st.sidebar.caption("Project Akhir PSD - Angger Maulana Effendi")
-
-# --- HEADER UTAMA ---
-st.title('🎵 Klasifikasi Audio Cats vs Dogs')
-st.markdown(f'Model: **SelectKBest + RandomForest** | Dataset: **CatsDogs TimeSeries**')
-
-# --- FUNGSI BANTUAN (UPDATED) ---
+# --- FUNGSI PREPROCESSING AUDIO (LOGIKA 16kHz) ---
 def process_audio_file(uploaded_file, target_length=14773):
     """
-    Memproses audio dengan:
-    1. Resample ke 8000Hz (agar cakupan waktu per sample lebih luas)
-    2. Trimming (menghapus hening di awal/akhir)
-    3. Padding/Cutting ke 14773 fitur
+    Preprocessing Audio agar sesuai dengan dataset CatsDogs (TSC):
+    1. Resample ke 16.000 Hz (Standar Dataset TSC).
+    2. Trim Silence (Hapus hening di awal).
+    3. Normalisasi Amplitudo.
+    4. Padding/Looping agar pas 14773 fitur.
     """
     try:
-        # 1. Load dengan SR 8000Hz (PENTING: Menyesuaikan dataset TimeSeries umum)
-        y, sr = librosa.load(uploaded_file, sr=8000)
+        # 1. Load dengan SR 16000 (KUNCI UTAMA AKURASI)
+        # Dataset CatsDogs TSC dilatih pada 16kHz.
+        y, sr = librosa.load(uploaded_file, sr=16000)
         
         # 2. Hapus Hening (Silence Trimming)
-        # Menghapus bagian diam (noise floor < 20db) di awal dan akhir
-        y, _ = librosa.effects.trim(y, top_db=20)
+        # Ambang batas 20dB untuk membuang noise ruangan di awal
+        y_trimmed, _ = librosa.effects.trim(y, top_db=20)
         
-        # 3. Logika Padding/Truncating
-        if len(y) > target_length:
-            # Jika masih terlalu panjang setelah di-trim, ambil bagian tengah
-            # (Bagian tengah biasanya berisi informasi suara utama)
-            start = (len(y) - target_length) // 2
-            y = y[start : start + target_length]
+        # Gunakan hasil trim jika tidak kosong, jika kosong (hening total) pakai aslinya
+        if len(y_trimmed) > 0:
+            y = y_trimmed
+            
+        # 3. Normalisasi Amplitudo (Agar volume input = volume training)
+        if np.max(np.abs(y)) > 0:
+            y = y / np.max(np.abs(y))
+            
+        # 4. Fitur Engineering: Padding / Cutting
+        if len(y) < target_length:
+            # Jika terlalu pendek: Ulangi suara (Looping) sampai penuh
+            # Ini lebih baik dari padding nol (diam)
+            n_repeat = int(np.ceil(target_length / len(y)))
+            y = np.tile(y, n_repeat)
+            y = y[:target_length]
         else:
-            # Jika kurang, tambahkan nol (padding constant) di belakang
-            padding = target_length - len(y)
-            y = np.pad(y, (0, padding), 'constant')
+            # Jika terlalu panjang: Ambil bagian paling keras (energi tertinggi)
+            # Karena suara kucing/anjing biasanya singkat dan meledak
+            rms = librosa.feature.rms(y=y, frame_length=2048, hop_length=512)[0]
+            max_rms_idx = np.argmax(rms)
+            # Konversi frame index ke sample index
+            peak_sample = max_rms_idx * 512
+            
+            # Tentukan start dan end di sekitar puncak suara
+            start = max(0, peak_sample - (target_length // 2))
+            end = start + target_length
+            
+            # Koreksi jika melebihi batas
+            if end > len(y):
+                end = len(y)
+                start = max(0, end - target_length)
+                
+            y = y[start:end]
             
         return y.reshape(1, -1)
     except Exception as e:
-        st.error(f"Error memproses audio: {e}")
+        st.error(f"Error preprocessing: {e}")
         return None
 
 def decode_label(x):
@@ -77,111 +87,122 @@ def decode_label(x):
 
 # --- LOAD MODEL ---
 if not os.path.exists(MODEL_PATH):
-    st.error(f'❌ File model `{MODEL_NAME}` tidak ditemukan.')
-    st.info("Pastikan file model sudah di-upload ke GitHub sejajar dengan app.py")
+    st.error(f'❌ Model tidak ditemukan: {MODEL_NAME}')
+    st.info("Pastikan file model.joblib sudah di-push ke GitHub.")
     st.stop()
-else:
+
+try:
     model = joblib.load(MODEL_PATH)
-    # Ambil jumlah fitur yang diharapkan model (default 14773)
-    expected_features = getattr(model, 'n_features_in_', 14773)
+except Exception as e:
+    st.error(f"Gagal memuat model: {e}")
+    st.stop()
 
-# --- TABS UTAMA ---
-tab1, tab2, tab3 = st.tabs(["📂 Gunakan Test Set", "🎙️ Upload File .wav", "📊 Visualisasi Data"])
+# --- INTERFACE ---
+st.title('🎵 Klasifikasi Audio Cats vs Dogs')
+st.caption('Model: SelectKBest + RandomForest | Sampling Rate: 16.000 Hz | Input: 14.773 Fitur')
 
-# === TAB 1: DATA TEST (Internal) ===
+# TABS
+tab1, tab2, tab3 = st.tabs(["📂 Test Set (Internal)", "🎙️ Upload .wav (Live)", "📊 Visualisasi"])
+
+# === TAB 1: DATA TEST ===
 with tab1:
     if os.path.exists(DATA_PATH):
         data = np.load(DATA_PATH, allow_pickle=True)
         X_test = data['X_test']
         y_test = data['y_test']
         
-        st.info("Simulasi prediksi menggunakan 20% data test yang sudah dipisahkan sebelumnya.")
-        
-        col_main, col_stat = st.columns([2, 1])
-        with col_main:
-            idx = st.slider('Pilih Index Sample Test Set', 0, len(X_test)-1, 0)
-            sample = X_test[idx].reshape(1, -1)
-            true_lbl = decode_label(y_test[idx])
+        col1, col2 = st.columns([2, 1])
+        with col1:
+            st.info("Prediksi menggunakan 20% data test yang sudah dipisahkan (Split).")
+            idx = st.slider('Pilih Index Sample', 0, len(X_test)-1, 0)
             
-            if st.button('🔍 Prediksi Sample Ini'):
+            if st.button('🔍 Prediksi Sample Internal'):
+                sample = X_test[idx].reshape(1, -1)
                 pred = model.predict(sample)[0]
+                true_lbl = decode_label(y_test[idx])
                 pred_lbl = decode_label(pred)
                 
-                res_c1, res_c2 = st.columns(2)
-                res_c1.metric("Label Sebenarnya", true_lbl)
-                
+                c1, c2 = st.columns(2)
+                c1.metric("Label Sebenarnya", true_lbl.upper())
                 if true_lbl.lower() == pred_lbl.lower():
-                    res_c2.success(f"✅ Prediksi Benar: {pred_lbl}")
+                    c2.success(f"✅ Prediksi: {pred_lbl.upper()}")
                 else:
-                    res_c2.error(f"❌ Prediksi Salah: {pred_lbl}")
-        
-        with col_stat:
-            st.write(f"**Total Sample Test:** {len(X_test)}")
-            st.write(f"**Dimensi Fitur:** {X_test.shape[1]}")
-
+                    c2.error(f"❌ Prediksi: {pred_lbl.upper()}")
+        with col2:
+            st.write(f"**Total Sample:** {len(X_test)}")
+            st.write(f"**Fitur:** {X_test.shape[1]}")
     else:
-        st.warning("Data test tidak ditemukan.")
+        st.warning("File data_processed.npz tidak ditemukan.")
 
-# === TAB 2: UPLOAD AUDIO (Eksternal) ===
+# === TAB 2: UPLOAD ===
 with tab2:
-    st.write("Uji coba model dengan file audio eksternal (.wav).")
-    uploaded_wav = st.file_uploader("Upload file .wav di sini", type=["wav"])
+    st.write("### 🎙️ Uji Coba Audio Sendiri")
+    st.markdown("Agar akurat, gunakan rekaman yang jelas (minim noise) dan berdurasi sekitar 1 detik.")
     
-    if uploaded_wav is not None:
+    uploaded_wav = st.file_uploader("Upload file .wav", type=["wav"])
+    
+    if uploaded_wav:
         st.audio(uploaded_wav)
+        
         if st.button("⚡ Analisis Audio"):
-            with st.spinner("Sedang memproses (Resampling 8kHz & Trimming)..."):
-                feats = process_audio_file(uploaded_wav, target_length=expected_features)
+            with st.spinner("Memproses audio (Resampling 16kHz, Trimming, Normalizing)..."):
+                # Proses audio
+                feats = process_audio_file(uploaded_wav)
+                
                 if feats is not None:
-                    pred = model.predict(feats)[0]
-                    lbl = decode_label(pred)
-                    
-                    st.markdown("### Hasil Klasifikasi:")
-                    if 'cat' in lbl.lower() or 'kucing' in lbl.lower():
-                        st.success(f"🐱 **KUCING (Cat)**")
-                    else:
-                        st.success(f"🐶 **ANJING (Dog)**")
+                    # Prediksi Probabilitas
+                    try:
+                        probs = model.predict_proba(feats)[0] # [Prob_Cat, Prob_Dog]
+                        # Asumsi kelas: 0 = Cat, 1 = Dog (berdasarkan sidebar kamu)
+                        p_cat = probs[0]
+                        p_dog = probs[1]
+                        
+                        # Tampilkan Progress Bar
+                        col_res1, col_res2 = st.columns(2)
+                        with col_res1:
+                            st.markdown(f"**KUCING (Cat)**: `{p_cat:.1%}`")
+                            st.progress(float(p_cat))
+                        with col_res2:
+                            st.markdown(f"**ANJING (Dog)**: `{p_dog:.1%}`")
+                            st.progress(float(p_dog))
+                        
+                        # Keputusan Final
+                        st.markdown("---")
+                        if p_cat > p_dog:
+                            st.success(f"🐱 Hasil Prediksi: **KUCING** ({p_cat:.1%})")
+                        else:
+                            st.success(f"🐶 Hasil Prediksi: **ANJING** ({p_dog:.1%})")
+                            
+                    except:
+                        # Fallback jika model tidak support predict_proba
+                        pred = model.predict(feats)[0]
+                        lbl = decode_label(pred)
+                        st.info(f"Hasil Prediksi: {lbl}")
 
-# === TAB 3: VISUALISASI (Laporan) ===
+# === TAB 3: VISUALISASI ===
 with tab3:
-    st.header("🖼️ Visualisasi & Analisis")
+    st.header("🖼️ Visualisasi Model & Data")
     
-    # 1. Confusion Matrix
-    st.subheader("1. Evaluasi Model (Confusion Matrix)")
+    # Confusion Matrix
     cm_path = os.path.join(FIG_DIR, 'confusion_matrix_selectk_best.png')
-    
     if os.path.exists(cm_path):
-        col_cm1, col_cm2 = st.columns([1, 2])
-        with col_cm1:
-            st.markdown("""
-            **Interpretasi:**
-            - **Diagonal**: Jumlah prediksi yang **Benar**.
-            - **Off-Diagonal**: Jumlah prediksi yang **Salah**.
-            Gambar ini menunjukkan seberapa baik model membedakan suara Kucing vs Anjing pada data uji.
-            """)
-        with col_cm2:
-            st.image(Image.open(cm_path), caption="Confusion Matrix: SelectKBest + RF", use_column_width=True)
+        st.image(Image.open(cm_path), caption="Confusion Matrix Model", width=500)
     else:
-        st.warning("Gambar Confusion Matrix tidak ditemukan.")
-
+        st.warning("Confusion matrix tidak ditemukan di folder figures.")
+        
     st.markdown("---")
-
-    # 2. Preprocessing
-    st.subheader("2. Proses Preprocessing Data")
-    st.write("Visualisasi langkah-langkah penyiapan data:")
+    st.subheader("Distribusi & Preprocessing")
     
-    # Sesuaikan nama file gambar di sini
-    prep_images = [
-        {"name": "Distribusi Kelas", "file": "class_distribution.png"},
-        {"name": "Histogram Variansi", "file": "variance_histogram.png"},
-        {"name": "Sampel Boxplot", "file": "boxplots_first4.png"}
-    ]
+    # Galeri Gambar
+    # Pastikan nama file ini ada di folder figures kamu!
+    img_list = ["class_distribution.png", "variance_histogram.png", "boxplots_first4.png"]
     
     cols = st.columns(3)
-    for i, item in enumerate(prep_images):
-        with cols[i % 3]:
-            img_p = os.path.join(FIG_DIR, item["file"])
-            if os.path.exists(img_p):
-                st.image(Image.open(img_p), caption=item["name"], use_column_width=True)
-            else:
-                st.info(f"Gambar {item['name']} tidak tersedia.")
+    for i, fname in enumerate(img_list):
+        fpath = os.path.join(FIG_DIR, fname)
+        if os.path.exists(fpath):
+            with cols[i%3]:
+                st.image(Image.open(fpath), caption=fname, use_column_width=True)
+
+st.sidebar.markdown("---")
+st.sidebar.caption("Project Akhir PSD - Angger Maulana Effendi")
