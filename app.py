@@ -38,25 +38,32 @@ st.title('🎵 Klasifikasi Audio Cats vs Dogs')
 st.markdown(f'Model: **SelectKBest + RandomForest** | Dataset: **CatsDogs TimeSeries**')
 
 # --- FUNGSI BANTUAN ---
+# --- GANTI FUNGSI PROCESS_AUDIO_FILE DI APP.PY KAMU ---
 def process_audio_file(uploaded_file, target_length=14773):
     try:
-        y, sr = librosa.load(uploaded_file, sr=None)
-        # Padding atau Truncating ke panjang fitur yang sesuai (14773)
+        # Load audio dengan Sampling Rate 8000 Hz (ini adalah asumsi terbaik)
+        y, sr = librosa.load(uploaded_file, sr=8000) 
+        
+        # Hapus Hening (Trim) - Ini penting untuk fokus pada suara
+        y_trimmed, _ = librosa.effects.trim(y, top_db=20)
+        
+        # Kita pakai sinyal yang sudah di-trim
+        y = y_trimmed 
+            
+        # 4. Logika Padding/Truncating (Mengambil 14773 titik dari data yang sudah di-trim)
         if len(y) > target_length:
+            # Jika terlalu panjang (lebih dari 14773), ambil bagian awal
             y = y[:target_length]
         else:
+            # Jika terlalu pendek, tambahkan nol (padding mode='constant')
+            # Ini mengasumsikan model dilatih dengan padding nol
             padding = target_length - len(y)
             y = np.pad(y, (0, padding), 'constant')
+            
         return y.reshape(1, -1)
     except Exception as e:
         st.error(f"Error memproses audio: {e}")
         return None
-
-def decode_label(x):
-    try:
-        return x.decode() if isinstance(x, (bytes, bytearray)) else str(x)
-    except:
-        return str(x)
 
 # --- LOAD MODEL ---
 if not os.path.exists(MODEL_PATH):
